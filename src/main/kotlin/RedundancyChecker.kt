@@ -21,9 +21,12 @@ object RedundancyChecker {
     private const val TEMPERATURE = 0.7
     private const val SIMILARITY_THRESHOLD = 0.5
 
-    private val SYSTEM_PROMPT = """
-Ты — помощник в постановке задач. Верни ТОЛЬКО валидный JSON без markdown:
+    private fun systemPrompt() = """
+Ты — помощник в постановке задач. Сегодня: ${currentDateContext()}.
+Верни ТОЛЬКО валидный JSON без markdown:
 {"Задача":"<глагол + конкретное действие>","Дата":"<DD.MM.YYYY или {дата в формате DD.MM.YYYY}>","Рекомендация":"<практический совет>"}
+
+Правила для Дата: если пользователь указал конкретный день или относительную дату (сегодня, завтра, в пятницу) — вычисли и укажи дату в формате DD.MM.YYYY; если дата не указана — используй {дата в формате DD.MM.YYYY}.
 """.trimIndent()
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -33,7 +36,7 @@ object RedundancyChecker {
 
         val responses = (1..RUNS).map {
             async {
-                try { client.chat(SYSTEM_PROMPT, userInput, temperature = TEMPERATURE) }
+                try { client.chat(systemPrompt(), userInput, temperature = TEMPERATURE) }
                 catch (e: Exception) { null }
             }
         }.awaitAll()

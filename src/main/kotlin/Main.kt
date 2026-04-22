@@ -8,13 +8,15 @@ fun main() {
     println("  1. Excel → JSONL        (generate fine-tuning dataset)")
     println("  2. Eval  → MD report    (run JSONL eval via OpenAI API)")
     println("  3. Calibration          (confidence & quality control)")
+    println("  4. Routing              (cheap → strong model fallback)")
     println()
-    print("Choice [1/2/3]: ")
+    print("Choice [1/2/3/4]: ")
 
     when (readLine()?.trim()) {
         "1" -> runExcelToJsonl()
         "2" -> runEval()
         "3" -> runCalibration()
+        "4" -> runRouting()
         else -> println("Invalid choice.")
     }
 }
@@ -195,6 +197,56 @@ fun runEval() {
 
     val reportFile = try {
         ReportWriter.write(results, resourcesDir)
+    } catch (e: Exception) {
+        println("ERROR writing report: ${e.message}")
+        return
+    }
+
+    println("Report saved: ${reportFile.absolutePath}")
+    println("Done.")
+}
+
+// ─── Mode 4: Routing between models ──────────────────────────────────────────
+
+fun runRouting() {
+    println()
+
+    val apiKey = System.getenv("OPEN_AI_API_KEY")
+    if (apiKey.isNullOrBlank()) {
+        println("ERROR: Environment variable OPEN_AI_API_KEY is not set.")
+        return
+    }
+
+    val resourcesDir = File("src/main/resources")
+    if (!resourcesDir.exists()) {
+        println("ERROR: Directory src/main/resources not found. Run from project root.")
+        return
+    }
+
+    println("Routing: ${CalibrationRunner.TEST_CASES.size} test cases")
+    println("Primary : gpt-4o-mini")
+    println("Fallback: gpt-4o")
+    println("Escalate if: confidence MEDIUM/LOW OR задача length < 20 chars")
+    println()
+
+    val client = OpenAiClient(apiKey)
+    val entries = try {
+        runBlocking { RouterRunner.run(client) }
+    } catch (e: Exception) {
+        println("ERROR during routing: ${e.message}")
+        return
+    } finally {
+        client.close()
+    }
+
+    val stayed    = entries.count { it.decision == RoutingDecision.STAYED }
+    val escalated = entries.count { it.decision == RoutingDecision.ESCALATED }
+    println()
+    println("Results: $stayed stayed on gpt-4o-mini, $escalated escalated to gpt-4o")
+
+    println("Writing report...")
+    val reportFile = try {
+        RouterReport.write(entries, resourcesDir)
     } catch (e: Exception) {
         println("ERROR writing report: ${e.message}")
         return

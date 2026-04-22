@@ -19,10 +19,11 @@ class OpenAiClient(private val apiKey: String) {
     suspend fun chat(
         systemPrompt: String,
         userPrompt: String,
-        temperature: Double = 0.0
+        temperature: Double = 0.0,
+        model: String = "gpt-4o-mini"
     ): ChatResponse {
         val requestBody = buildJsonObject {
-            put("model", "gpt-4o-mini")
+            put("model", model)
             put("temperature", temperature)
             put("messages", buildJsonArray {
                 add(buildJsonObject {

@@ -10,9 +10,12 @@ import kotlinx.serialization.json.jsonPrimitive
  */
 object ScoringChecker {
 
-    private val SYSTEM_PROMPT = """
-Ты — помощник в постановке задач. Верни ТОЛЬКО валидный JSON без markdown:
+    private fun systemPrompt() = """
+Ты — помощник в постановке задач. Сегодня: ${currentDateContext()}.
+Верни ТОЛЬКО валидный JSON без markdown:
 {"result":{"Задача":"<глагол + конкретное действие>","Дата":"<DD.MM.YYYY или {дата в формате DD.MM.YYYY}>","Рекомендация":"<практический совет>"},"confidence":"HIGH","reason":"<краткое пояснение уверенности>"}
+
+Правила для Дата: если пользователь указал конкретный день или относительную дату (сегодня, завтра, в пятницу) — вычисли и укажи дату в формате DD.MM.YYYY; если дата не указана — используй {дата в формате DD.MM.YYYY}.
 
 Правила confidence:
 - HIGH   — намерение понятно, задача сформулирована однозначно
@@ -24,7 +27,7 @@ object ScoringChecker {
 
     suspend fun check(userInput: String, client: OpenAiClient): ConfidenceResult {
         val start = System.currentTimeMillis()
-        val response = client.chat(SYSTEM_PROMPT, userInput, temperature = 0.0)
+        val response = client.chat(systemPrompt(), userInput, temperature = 0.0)
         val latencyMs = System.currentTimeMillis() - start
 
         return parse(response, latencyMs)

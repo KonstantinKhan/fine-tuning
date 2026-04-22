@@ -12,9 +12,12 @@ object ConstraintChecker {
 
     private const val MAX_RETRIES = 1
 
-    private val SYSTEM_PROMPT = """
-Ты — помощник в постановке задач. Верни ТОЛЬКО валидный JSON без markdown и без лишнего текста:
+    private fun systemPrompt() = """
+Ты — помощник в постановке задач. Сегодня: ${currentDateContext()}.
+Верни ТОЛЬКО валидный JSON без markdown и без лишнего текста:
 {"Задача":"<глагол + конкретное действие>","Дата":"<DD.MM.YYYY или {дата в формате DD.MM.YYYY}>","Рекомендация":"<практический совет>"}
+
+Правила для Дата: если пользователь указал конкретный день или относительную дату (сегодня, завтра, в пятницу) — вычисли и укажи дату в формате DD.MM.YYYY; если дата не указана — используй {дата в формате DD.MM.YYYY}.
 """.trimIndent()
 
     private val DATE_VALID = Regex("""\d{2}\.\d{2}\.\d{4}""")
@@ -28,7 +31,7 @@ object ConstraintChecker {
         var lastFailReason = "Unknown error"
 
         for (attempt in 0..MAX_RETRIES) {
-            val response = client.chat(SYSTEM_PROMPT, userInput, temperature = 0.0)
+            val response = client.chat(systemPrompt(), userInput, temperature = 0.0)
             totalPromptTokens += response.promptTokens
             totalCompletionTokens += response.completionTokens
 
