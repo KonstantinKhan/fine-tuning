@@ -41,7 +41,7 @@ object EvalRunner {
                     println("  [${idx + 1}/${lines.size}] → \"$user\"")
 
                     val assistant = try {
-                        client.chat(system, user)
+                        client.chat(system, user).content
                     } catch (e: Exception) {
                         println("  [${idx + 1}/${lines.size}] ERROR: ${e.message}")
                         "ERROR: ${e.message}"

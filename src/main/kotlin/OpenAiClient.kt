@@ -5,14 +5,25 @@ import io.ktor.client.statement.*
 import io.ktor.http.*
 import kotlinx.serialization.json.*
 
+data class ChatResponse(
+    val content: String,
+    val promptTokens: Int,
+    val completionTokens: Int
+)
+
 class OpenAiClient(private val apiKey: String) {
 
     private val httpClient = HttpClient(CIO)
     private val json = Json { ignoreUnknownKeys = true }
 
-    suspend fun chat(systemPrompt: String, userPrompt: String): String {
+    suspend fun chat(
+        systemPrompt: String,
+        userPrompt: String,
+        temperature: Double = 0.0
+    ): ChatResponse {
         val requestBody = buildJsonObject {
             put("model", "gpt-4o-mini")
+            put("temperature", temperature)
             put("messages", buildJsonArray {
                 add(buildJsonObject {
                     put("role", "system")
@@ -32,15 +43,21 @@ class OpenAiClient(private val apiKey: String) {
         }
 
         val body = response.bodyAsText()
-
         if (!response.status.isSuccess()) {
             error("OpenAI API error ${response.status.value}: $body")
         }
 
-        return json.parseToJsonElement(body).jsonObject["choices"]
+        val parsed = json.parseToJsonElement(body).jsonObject
+        val content = parsed["choices"]
             ?.jsonArray?.get(0)?.jsonObject?.get("message")
             ?.jsonObject?.get("content")?.jsonPrimitive?.content
             ?: error("Unexpected response format: $body")
+
+        val usage = parsed["usage"]?.jsonObject
+        val promptTokens = usage?.get("prompt_tokens")?.jsonPrimitive?.int ?: 0
+        val completionTokens = usage?.get("completion_tokens")?.jsonPrimitive?.int ?: 0
+
+        return ChatResponse(content, promptTokens, completionTokens)
     }
 
     fun close() = httpClient.close()

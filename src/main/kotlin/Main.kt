@@ -5,14 +5,16 @@ fun main() {
     println("=== Fine-Tuning Tool ===")
     println()
     println("Select mode:")
-    println("  1. Excel → JSONL (generate fine-tuning dataset)")
-    println("  2. Eval  → MD report (run JSONL eval via OpenAI API)")
+    println("  1. Excel → JSONL        (generate fine-tuning dataset)")
+    println("  2. Eval  → MD report    (run JSONL eval via OpenAI API)")
+    println("  3. Calibration          (confidence & quality control)")
     println()
-    print("Choice [1/2]: ")
+    print("Choice [1/2/3]: ")
 
     when (readLine()?.trim()) {
         "1" -> runExcelToJsonl()
         "2" -> runEval()
+        "3" -> runCalibration()
         else -> println("Invalid choice.")
     }
 }
@@ -193,6 +195,50 @@ fun runEval() {
 
     val reportFile = try {
         ReportWriter.write(results, resourcesDir)
+    } catch (e: Exception) {
+        println("ERROR writing report: ${e.message}")
+        return
+    }
+
+    println("Report saved: ${reportFile.absolutePath}")
+    println("Done.")
+}
+
+// ─── Mode 3: Confidence Calibration ──────────────────────────────────────────
+
+fun runCalibration() {
+    println()
+
+    val apiKey = System.getenv("OPEN_AI_API_KEY")
+    if (apiKey.isNullOrBlank()) {
+        println("ERROR: Environment variable OPEN_AI_API_KEY is not set.")
+        return
+    }
+
+    val resourcesDir = File("src/main/resources")
+    if (!resourcesDir.exists()) {
+        println("ERROR: Directory src/main/resources not found. Run from project root.")
+        return
+    }
+
+    println("Calibration: ${CalibrationRunner.TEST_CASES.size} test cases × 3 approaches")
+    println("Approaches : Constraint-based | Scoring | Redundancy (×3 runs)")
+    println("Model      : gpt-4o-mini")
+    println()
+
+    val client = OpenAiClient(apiKey)
+    val entries = try {
+        runBlocking { CalibrationRunner.run(client) }
+    } catch (e: Exception) {
+        println("ERROR during calibration: ${e.message}")
+        return
+    } finally {
+        client.close()
+    }
+
+    println("Writing report...")
+    val reportFile = try {
+        CalibrationReport.write(entries, resourcesDir)
     } catch (e: Exception) {
         println("ERROR writing report: ${e.message}")
         return
