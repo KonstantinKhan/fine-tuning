@@ -9,14 +9,16 @@ fun main() {
     println("  2. Eval  → MD report    (run JSONL eval via OpenAI API)")
     println("  3. Calibration          (confidence & quality control)")
     println("  4. Routing              (cheap → strong model fallback)")
+    println("  5. Fine-tune            (upload JSONL → create job → poll status)")
     println()
-    print("Choice [1/2/3/4]: ")
+    print("Choice [1/2/3/4/5]: ")
 
     when (readLine()?.trim()) {
         "1" -> runExcelToJsonl()
         "2" -> runEval()
         "3" -> runCalibration()
         "4" -> runRouting()
+        "5" -> runFineTune()
         else -> println("Invalid choice.")
     }
 }
@@ -122,6 +124,121 @@ fun runExcelToJsonl() {
 
     println()
     println("Saved: ${outputFile.absolutePath}")
+    println("Done.")
+}
+
+// ─── Mode 5: Fine-tune via OpenAI API ────────────────────────────────────────
+
+fun runFineTune() {
+    println()
+
+    val apiKey = System.getenv("OPEN_AI_API_KEY")
+    if (apiKey.isNullOrBlank()) {
+        println("ERROR: Environment variable OPEN_AI_API_KEY is not set.")
+        return
+    }
+
+    val resourcesDir = File("src/main/resources")
+    if (!resourcesDir.exists()) {
+        println("ERROR: Directory src/main/resources not found. Run from project root.")
+        return
+    }
+
+    // ── Select JSONL file ──────────────────────────────────────────────────────
+    val jsonlFiles = resourcesDir.listFiles { f -> f.extension == "jsonl" }?.sorted() ?: emptyList()
+
+    val selectedFile: File = if (jsonlFiles.isNotEmpty()) {
+        println("Available JSONL files:")
+        jsonlFiles.forEachIndexed { idx, f ->
+            val kb = f.length() / 1024
+            println("  ${idx + 1}. ${f.name}  (${kb} KB)")
+        }
+        println("  0. Enter path manually")
+        println()
+        print("Select [1-${jsonlFiles.size}] or 0: ")
+
+        when (val input = readLine()?.trim()) {
+            "0", null -> {
+                print("Enter full path to jsonl file: ")
+                val path = readLine()?.trim() ?: return
+                val file = File(path)
+                if (!file.exists()) { println("File not found: $path"); return }
+                file
+            }
+            else -> {
+                val idx = input.toIntOrNull()?.minus(1)
+                if (idx == null || idx !in jsonlFiles.indices) {
+                    println("Invalid selection.")
+                    return
+                }
+                jsonlFiles[idx]
+            }
+        }
+    } else {
+        println("No jsonl files found in src/main/resources.")
+        print("Enter full path to jsonl file: ")
+        val path = readLine()?.trim() ?: return
+        val file = File(path)
+        if (!file.exists()) { println("File not found: $path"); return }
+        file
+    }
+
+    // ── Select base model ──────────────────────────────────────────────────────
+    println()
+    print("Base model [gpt-4o-mini]: ")
+    val modelInput = readLine()?.trim()
+    val model = if (modelInput.isNullOrBlank()) "gpt-4o-mini" else modelInput
+
+    // ── Confirm ────────────────────────────────────────────────────────────────
+    println()
+    println("File  : ${selectedFile.name}  (${selectedFile.length() / 1024} KB)")
+    println("Model : $model")
+    println()
+    print("Start fine-tuning job? [y/n]: ")
+    if (readLine()?.trim()?.lowercase() != "y") {
+        println("Cancelled.")
+        return
+    }
+
+    val client = FineTuneClient(apiKey)
+    try {
+        // ── Upload ─────────────────────────────────────────────────────────────
+        println()
+        print("Uploading ${selectedFile.name} ... ")
+        val fileId = runBlocking { client.uploadFile(selectedFile) }
+        println("OK")
+        println("file_id: $fileId")
+
+        // ── Create job ─────────────────────────────────────────────────────────
+        println()
+        print("Creating fine-tuning job ... ")
+        val job = runBlocking { client.createJob(fileId, model) }
+        println("OK")
+        println("job_id : ${job.id}")
+        println("status : ${job.status}")
+
+        // ── Poll ───────────────────────────────────────────────────────────────
+        println()
+        println("Polling every 30s (Ctrl+C to stop and check manually):")
+        val finalJob = runBlocking { client.pollUntilDone(job.id) }
+
+        // ── Result ─────────────────────────────────────────────────────────────
+        println()
+        when (finalJob.status) {
+            "succeeded" -> {
+                println("Fine-tuning complete!")
+                println("Model: ${finalJob.fineTunedModel}")
+                finalJob.trainedTokens?.let { println("Trained tokens: $it") }
+            }
+            "failed" -> println("Fine-tuning FAILED. Check the OpenAI dashboard for details.")
+            else -> println("Final status: ${finalJob.status}")
+        }
+    } catch (e: Exception) {
+        println("ERROR: ${e.message}")
+    } finally {
+        client.close()
+    }
+
     println("Done.")
 }
 
