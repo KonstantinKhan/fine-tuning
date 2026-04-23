@@ -9,14 +9,16 @@ fun main() {
     println("  2. Eval  → MD report    (run JSONL eval via OpenAI API)")
     println("  3. Calibration          (confidence & quality control)")
     println("  4. Routing              (cheap → strong model fallback)")
+    println("  5. Decompose            (monolithic vs multi-stage inference)")
     println()
-    print("Choice [1/2/3/4]: ")
+    print("Choice [1/2/3/4/5]: ")
 
     when (readLine()?.trim()) {
         "1" -> runExcelToJsonl()
         "2" -> runEval()
         "3" -> runCalibration()
         "4" -> runRouting()
+        "5" -> runDecompose()
         else -> println("Invalid choice.")
     }
 }
@@ -247,6 +249,56 @@ fun runRouting() {
     println("Writing report...")
     val reportFile = try {
         RouterReport.write(entries, resourcesDir)
+    } catch (e: Exception) {
+        println("ERROR writing report: ${e.message}")
+        return
+    }
+
+    println("Report saved: ${reportFile.absolutePath}")
+    println("Done.")
+}
+
+// ─── Mode 5: Decompose — Monolithic vs Multi-Stage ───────────────────────────
+
+fun runDecompose() {
+    println()
+
+    val apiKey = System.getenv("OPEN_AI_API_KEY")
+    if (apiKey.isNullOrBlank()) {
+        println("ERROR: Environment variable OPEN_AI_API_KEY is not set.")
+        return
+    }
+
+    val resourcesDir = File("src/main/resources")
+    if (!resourcesDir.exists()) {
+        println("ERROR: Directory src/main/resources not found. Run from project root.")
+        return
+    }
+
+    println("Decompose: ${CalibrationRunner.TEST_CASES.size} test cases × 2 variants")
+    println("Variant A: Monolithic  — 1 prompt, gpt-4o-mini")
+    println("Variant B: Multi-Stage — Stage1(mini) → Stage2(mini) → Stage3(mini or gpt-4o)")
+    println()
+
+    val client = OpenAiClient(apiKey)
+    val entries = try {
+        runBlocking { DecomposeRunner.run(client) }
+    } catch (e: Exception) {
+        println("ERROR during decompose: ${e.message}")
+        return
+    } finally {
+        client.close()
+    }
+
+    val monoOk  = entries.count { it.monoOk }
+    val multiOk = entries.count { it.multiOk }
+    val usedFull = entries.count { it.stage3Model == "gpt-4o" }
+    println()
+    println("Results: Mono OK=$monoOk/${entries.size}  Multi OK=$multiOk/${entries.size}  Stage3→gpt-4o=$usedFull")
+
+    println("Writing report...")
+    val reportFile = try {
+        DecomposeReport.write(entries, resourcesDir)
     } catch (e: Exception) {
         println("ERROR writing report: ${e.message}")
         return
