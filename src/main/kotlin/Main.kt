@@ -11,8 +11,10 @@ fun main() {
     println("  4. Routing              (cheap → strong model fallback)")
     println("  5. Decompose            (monolithic vs multi-stage inference)")
     println("  6. Fine-tune            (upload JSONL → create job → poll status)")
+    println("  7. Micro eval           (embedding classifier, labeled accuracy)")
+    println("  8. Micro infer          (classify arbitrary inputs, no labels needed)")
     println()
-    print("Choice [1/2/3/4/5/6]: ")
+    print("Choice [1/2/3/4/5/6/7/8]: ")
 
     when (readLine()?.trim()) {
         "1" -> runExcelToJsonl()
@@ -21,6 +23,8 @@ fun main() {
         "4" -> runRouting()
         "5" -> runDecompose()
         "6" -> runFineTune()
+        "7" -> runMicro()
+        "8" -> runInfer()
         else -> println("Invalid choice.")
     }
 }
@@ -416,6 +420,165 @@ fun runDecompose() {
     println("Writing report...")
     val reportFile = try {
         DecomposeReport.write(entries, resourcesDir)
+    } catch (e: Exception) {
+        println("ERROR writing report: ${e.message}")
+        return
+    }
+
+    println("Report saved: ${reportFile.absolutePath}")
+    println("Done.")
+}
+
+// ─── Mode 8: Micro Infer ─────────────────────────────────────────────────────
+
+fun runInfer() {
+    println()
+
+    val resourcesDir = File("src/main/resources")
+    if (!resourcesDir.exists()) {
+        println("ERROR: Directory src/main/resources not found. Run from project root.")
+        return
+    }
+
+    println("Micro infer — classify inputs without labels")
+    println("Micro  : qwen3-embedding:8b (cosine similarity)")
+    println("Fallback: qwen3.6:35b (called only when confidence is LOW/MEDIUM)")
+    println()
+    println("Input source:")
+    println("  1. Interactive (enter text one by one)")
+    println("  2. Plain text file (one query per line)")
+    println("  3. JSONL dataset (extracts user.content)")
+    println()
+    print("Choice [1/2/3]: ")
+
+    val inputs: List<String> = when (readLine()?.trim()) {
+        "1" -> {
+            println()
+            println("Enter queries (empty line to finish):")
+            val lines = mutableListOf<String>()
+            while (true) {
+                print("> ")
+                val line = readLine()?.trim() ?: break
+                if (line.isEmpty()) break
+                lines += line
+            }
+            if (lines.isEmpty()) { println("No input. Cancelled."); return }
+            lines
+        }
+        "2" -> {
+            print("Path to file: ")
+            val path = readLine()?.trim() ?: return
+            val file = File(path)
+            if (!file.exists()) { println("File not found: $path"); return }
+            file.readLines().map { it.trim() }.filter { it.isNotEmpty() }
+        }
+        "3" -> {
+            val jsonlFiles = resourcesDir.listFiles { f -> f.extension == "jsonl" }?.sorted() ?: emptyList()
+            if (jsonlFiles.isEmpty()) { println("No JSONL files found."); return }
+            println()
+            println("Available JSONL files:")
+            jsonlFiles.forEachIndexed { idx, f -> println("  ${idx + 1}. ${f.name}") }
+            print("Select [1-${jsonlFiles.size}]: ")
+            val idx = readLine()?.trim()?.toIntOrNull()?.minus(1)
+            if (idx == null || idx !in jsonlFiles.indices) { println("Invalid selection."); return }
+            val file = jsonlFiles[idx]
+            val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+            file.readLines()
+                .filter { it.isNotBlank() }
+                .mapNotNull { line ->
+                    try {
+                        val root = json.parseToJsonElement(line).let {
+                            it as? kotlinx.serialization.json.JsonObject
+                        } ?: return@mapNotNull null
+                        val messages = root["messages"]
+                            ?.let { it as? kotlinx.serialization.json.JsonArray } ?: return@mapNotNull null
+                        messages.firstOrNull { msg ->
+                            (msg as? kotlinx.serialization.json.JsonObject)
+                                ?.get("role")
+                                ?.let { it as? kotlinx.serialization.json.JsonPrimitive }
+                                ?.content == "user"
+                        }?.let { msg ->
+                            (msg as? kotlinx.serialization.json.JsonObject)
+                                ?.get("content")
+                                ?.let { it as? kotlinx.serialization.json.JsonPrimitive }
+                                ?.content
+                        }
+                    } catch (e: Exception) { null }
+                }
+        }
+        else -> { println("Invalid choice."); return }
+    }
+
+    if (inputs.isEmpty()) { println("No inputs to process."); return }
+
+    println()
+    println("Inputs: ${inputs.size}")
+    println()
+
+    val client = OllamaClient()
+    val results = try {
+        runBlocking {
+            val anchors = InferRunner.warmUpAnchors(client)
+            println()
+            InferRunner.run(inputs, anchors, client)
+        }
+    } catch (e: Exception) {
+        println("ERROR: ${e.message}")
+        return
+    } finally {
+        client.close()
+    }
+
+    val accepted  = results.count { it.decision == MicroDecision.ACCEPTED }
+    val escalated = results.count { it.decision == MicroDecision.ESCALATED }
+    println()
+    println("Done: $accepted handled by micro-model, $escalated escalated to LLM")
+
+    println("Writing report...")
+    val reportFile = try {
+        InferReport.write(results, resourcesDir)
+    } catch (e: Exception) {
+        println("ERROR writing report: ${e.message}")
+        return
+    }
+    println("Report saved: ${reportFile.absolutePath}")
+}
+
+// ─── Mode 7: Micro-model First ───────────────────────────────────────────────
+
+fun runMicro() {
+    println()
+
+    val resourcesDir = File("src/main/resources")
+    if (!resourcesDir.exists()) {
+        println("ERROR: Directory src/main/resources not found. Run from project root.")
+        return
+    }
+
+    println("Micro-model first pipeline")
+    println("Level 1 : qwen3-embedding:8b (cosine similarity, Ollama)")
+    println("Level 2 : qwen3.6:35b        (LLM fallback, Ollama)")
+    println("Cases   : 27 (10 eval + 6 train + 11 new, labeled ground truth)")
+    println()
+
+    val client = OllamaClient()
+    val entries = try {
+        runBlocking { MicroRunner.run(client) }
+    } catch (e: Exception) {
+        println("ERROR during micro run: ${e.message}")
+        return
+    } finally {
+        client.close()
+    }
+
+    val accepted  = entries.count { it.decision == MicroDecision.ACCEPTED }
+    val escalated = entries.count { it.decision == MicroDecision.ESCALATED }
+    println()
+    println("Results: $accepted accepted (micro-only), $escalated escalated to LLM")
+
+    println("Writing report...")
+    val reportFile = try {
+        MicroReport.write(entries, resourcesDir)
     } catch (e: Exception) {
         println("ERROR writing report: ${e.message}")
         return
